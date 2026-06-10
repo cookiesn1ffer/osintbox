@@ -1,0 +1,6 @@
+.env
+osint.db
+__pycache__/
+*.pyc
+*.bak*
+templates/
