@@ -81,6 +81,7 @@ INDEX_HTML = """<!DOCTYPE html>
     --bg:        #080b08;
     --bg2:       #0f140f;
     --bg3:       #161d16;
+    --bg4:       #1d271d;
     --border:    #1e2a1e;
     --green:     #00ff88;
     --cyan:      #00d4ff;
@@ -92,7 +93,10 @@ INDEX_HTML = """<!DOCTYPE html>
   }
 
   html, body {
-    background: var(--bg);
+    background:
+      radial-gradient(circle, rgba(0,255,136,0.05) 1px, transparent 1.6px) 0 0 / 26px 26px,
+      var(--bg);
+    background-attachment: fixed;
     color: var(--text);
     font-family: 'JetBrains Mono', monospace;
     min-height: 100vh;
@@ -432,6 +436,174 @@ INDEX_HTML = """<!DOCTYPE html>
 
   .empty-history { padding: 24px 20px; color: var(--muted); font-size: 11px; text-align: center; }
 
+  /* ── Dossier card ── */
+  .dossier {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 18px;
+    margin-bottom: 18px;
+  }
+
+  .dossier-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  .dossier-avatar {
+    width: 52px; height: 52px;
+    flex: 0 0 52px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg3);
+    color: var(--green);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .dossier-avatar svg { width: 28px; height: 28px; }
+
+  .dossier-title { font-size: 15px; font-weight: 700; color: var(--text); }
+  .dossier-query {
+    font-size: 10px; color: var(--dim);
+    letter-spacing: 0.15em; text-transform: uppercase;
+    margin-top: 2px;
+  }
+  .dossier-badges { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+
+  .badge-pill {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    border: 1px solid transparent;
+  }
+  .pill-green { background: rgba(0,255,136,0.12); color: var(--green); border-color: rgba(0,255,136,0.25); }
+  .pill-cyan  { background: rgba(0,212,255,0.12); color: var(--cyan);  border-color: rgba(0,212,255,0.25); }
+  .pill-red   { background: rgba(255,68,102,0.12); color: var(--red);  border-color: rgba(255,68,102,0.25); }
+
+  .dossier-table { width: 100%; border-collapse: collapse; border-top: 1px solid var(--border); }
+  .dossier-table tr { border-bottom: 1px solid var(--border); }
+  .dossier-table tr:last-child { border-bottom: none; }
+  .dossier-table td { padding: 7px 4px; font-size: 11px; }
+  .dossier-table-key { color: var(--dim); width: 45%; }
+  .dossier-table-val { color: var(--text); }
+
+  /* ── Platform results table ── */
+  .platform-table-wrap {
+    max-height: 340px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-top: 8px;
+  }
+
+  .platform-table { width: 100%; border-collapse: collapse; }
+
+  .platform-table thead th {
+    position: sticky;
+    top: 0;
+    background: rgba(0,212,255,0.1);
+    color: var(--cyan);
+    text-align: left;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 8px 12px;
+    z-index: 1;
+  }
+
+  .platform-row td {
+    padding: 7px 12px;
+    border-top: 1px solid var(--border);
+    border-left: 2px solid transparent;
+    font-size: 12px;
+    transition: background 0.1s, border-color 0.1s;
+  }
+
+  .platform-row:hover td { background: var(--bg4); }
+  .platform-row:hover td:first-child { border-left-color: var(--cyan); }
+
+  .platform-cell, .platform-link-cell { vertical-align: middle; }
+
+  .platform-cell-inner { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .platform-icon { display: inline-flex; color: var(--dim); }
+  .platform-icon svg { width: 18px; height: 18px; display: block; }
+  .platform-row:hover .platform-icon { color: var(--cyan); }
+  .platform-name { color: var(--text); }
+
+  .platform-link-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .platform-link {
+    color: var(--green);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+  }
+  .platform-link:hover { text-decoration: underline; }
+
+  /* ── Summary links panel ── */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 16px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+    margin-top: 16px;
+  }
+  .summary-key { color: var(--dim); font-size: 11px; }
+  .summary-val { color: var(--text); font-size: 11px; font-weight: 700; }
+
+  /* ── Dossier summary / donut charts ── */
+  .dossier-summary { margin-top: 16px; }
+
+  .donut-row {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+
+  .donut-block {
+    flex: 1 1 160px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    text-align: center;
+  }
+
+  .donut-title {
+    font-size: 10px; color: var(--dim);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .donut-center-text {
+    fill: var(--text);
+    font-size: 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+  }
+
+  .donut-legend { margin-top: 10px; text-align: left; display: inline-block; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text); margin-bottom: 4px; }
+  .legend-swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex: 0 0 auto; }
+
   /* scrollbar */
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -544,6 +716,163 @@ INDEX_HTML = """<!DOCTYPE html>
       .replace(/'/g, '&#39;');
   }
 
+  // ── Platform icons (monochrome, currentColor) ──────────────────────────
+  const ICONS = {
+    github: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.09.68-.22.68-.48 0-.24-.01-1.04-.01-1.89-2.78.62-3.37-1.21-3.37-1.21-.46-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.05 1.53 1.05.89 1.56 2.34 1.11 2.91.85.09-.66.34-1.11.62-1.36-2.22-.26-4.56-1.13-4.56-5.02 0-1.11.39-2.01 1.03-2.72-.1-.26-.45-1.3.1-2.7 0 0 .84-.27 2.76 1.04a9.4 9.4 0 0 1 5.02 0c1.92-1.32 2.76-1.04 2.76-1.04.55 1.4.2 2.44.1 2.7.64.71 1.03 1.61 1.03 2.72 0 3.9-2.35 4.76-4.58 5.01.36.32.67.94.67 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.58.69.48A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>`,
+    instagram: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.2" cy="6.8" r="1" fill="currentColor" stroke="none"/></svg>`,
+    twitter: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 4l16 16M20 4L4 20"/></svg>`,
+    reddit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="13" r="7"/><circle cx="9" cy="13" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1" fill="currentColor" stroke="none"/><path d="M8.5 16.5c1 .8 2.2 1.2 3.5 1.2s2.5-.4 3.5-1.2" stroke-linecap="round"/><circle cx="12" cy="6.5" r="1.2" fill="currentColor" stroke="none"/><path d="M12 7.5v2"/></svg>`,
+    facebook: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 8.5h2.5V5.3C16.1 5.1 15 5 13.8 5c-2.5 0-4.2 1.5-4.2 4.3V11H7v3h2.6v7h3.2v-7h2.6l.4-3h-3V9.6c0-.9.3-1.1 1.2-1.1z"/></svg>`,
+    linkedin: `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="9" r="1.3"/><rect x="6.8" y="11" width="2.4" height="7"/><path d="M12.5 11h2.3v1.2c.5-.8 1.4-1.4 2.6-1.4 2 0 3 1.3 3 3.8V18h-2.4v-3c0-1.1-.4-1.8-1.4-1.8-.8 0-1.3.6-1.5 1.1-.1.2-.1.5-.1.8V18h-2.4z"/></svg>`,
+    tiktok: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 3v10.2a3.3 3.3 0 1 1-2-3v-2.1a5.3 5.3 0 1 0 4 5.1V8.6c1 .8 2.2 1.3 3.6 1.3V7.7c-1.6 0-2.9-.7-3.6-1.9-.4-.6-.6-1.3-.6-2.1z"/></svg>`,
+    youtube: `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="2.5" y="6" width="19" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.5 9.5l5 2.5-5 2.5z"/></svg>`,
+    telegram: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"><path d="M21 4L3 11.5l5.5 2 1.8 5.8 3-3.7 4.4 3.4z"/><path d="M9.3 14.3L19 7"/></svg>`,
+    discord: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.5 5.5c-1.6.3-3 .8-4.3 1.5C2.7 10 2.3 13.5 2.6 17c1.5 1.1 3 1.8 4.5 2.2l.9-1.5c-.8-.3-1.5-.6-2.2-1.1.2-.1.4-.3.6-.4 3.2 1.5 6.7 1.5 9.9 0 .2.1.4.3.6.4-.7.5-1.4.8-2.2 1.1l.9 1.5c1.5-.4 3-1.1 4.5-2.2.4-4-.4-7.4-2.4-10-1.3-.7-2.7-1.2-4.3-1.5l-.5 1c1.3.2 2.5.6 3.6 1.2-2.6-1.2-5.7-1.2-8.3 0 1.1-.6 2.3-1 3.6-1.2zM9 12.8c-.8 0-1.4.7-1.4 1.6s.6 1.6 1.4 1.6 1.4-.7 1.4-1.6-.6-1.6-1.4-1.6zm6 0c-.8 0-1.4.7-1.4 1.6s.6 1.6 1.4 1.6 1.4-.7 1.4-1.6-.6-1.6-1.4-1.6z"/></svg>`,
+    keybase: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8" cy="9" r="4"/><path d="M11 12l9 9M16 17l2-2M18.5 19.5l2-2"/></svg>`,
+    pinterest: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-3.6 19.3c-.1-.8-.2-2 .1-2.9l1.3-5.5s-.3-.6-.3-1.6c0-1.5.9-2.6 2-2.6.9 0 1.4.7 1.4 1.6 0 1-.6 2.4-.9 3.7-.3 1.1.5 2 1.6 2 1.9 0 3.2-2.4 3.2-5.3 0-2.2-1.5-3.8-4.2-3.8-3 0-4.9 2.2-4.9 4.7 0 .9.3 1.5.6 2 .2.2.2.3.1.5l-.3 1.1c-.1.3-.3.4-.6.3-1.2-.5-1.9-2-1.9-3.6 0-2.9 2.4-6.3 7.2-6.3 3.8 0 6.3 2.7 6.3 5.7 0 3.9-2.2 6.9-5.4 6.9-1.1 0-2.1-.6-2.4-1.3 0 0-.6 2.2-.7 2.7-.2.7-.6 1.5-.9 2.1A10 10 0 1 0 12 2z"/></svg>`,
+    snapchat: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3c-3 0-4.8 2.2-4.8 5 0 1 .1 1.8.2 2.4-.7.3-1.6.5-2.1 1-.3.3-.2.8.3 1 .4.2 1 .3 1.2.6.2.3-.1.6-.4 1-.5.6-1 1.2-.4 1.8.4.4 1.2.4 1.7.5.4.1.5.3.6.7.2.7.6 1.5 2 1.5.9 0 1.5-.3 1.9-.3s1 .3 1.9.3c1.4 0 1.8-.8 2-1.5.1-.4.2-.6.6-.7.5-.1 1.3-.1 1.7-.5.6-.6.1-1.2-.4-1.8-.3-.4-.6-.7-.4-1 .2-.3.8-.4 1.2-.6.5-.2.6-.7.3-1-.5-.5-1.4-.7-2.1-1 .1-.6.2-1.4.2-2.4 0-2.8-1.8-5-4.8-5z"/></svg>`,
+    twitch: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 2L2.5 5.5v14H7V22l3-2.5h3.5L19 14V2H4zm13 11l-2.5 2.5h-3.5L8.5 18v-2.5H5V4h12v9z"/><path d="M14.5 6.5h2v5h-2zM9.5 6.5h2v5h-2z"/></svg>`,
+    steam: `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="15.5" cy="8.5" r="2.3"/><circle cx="8.5" cy="15" r="2"/><path d="M10.2 13.5l3-3" stroke="currentColor" stroke-width="1.4"/></svg>`,
+    default: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 4 6 4 9s-1.5 6.3-4 9c-2.5-2.7-4-6-4-9s1.5-6.3 4-9z"/></svg>`,
+  };
+
+  function getPlatformIcon(site) {
+    const low = (site || '').toLowerCase();
+    if (low === 'x' || low.includes('twitter')) return ICONS.twitter;
+    for (const key in ICONS) {
+      if (key !== 'default' && low.includes(key)) return ICONS[key];
+    }
+    return ICONS.default;
+  }
+
+  const PERSON_ICON = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.42 3.58-8 8-8s8 3.58 8 8H4z"/></svg>`;
+
+  // ── Dossier card: avatar + title + pill badges + key/value table ──────
+  function buildDossierCard(type, query, badges, rows) {
+    let html = `<div class="dossier">`;
+    html += `<div class="dossier-head">`;
+    html += `<div class="dossier-avatar">${PERSON_ICON}</div>`;
+    html += `<div class="dossier-info">`;
+    html += `<div class="dossier-title">${escapeHtml(query)}</div>`;
+    html += `<div class="dossier-query">${escapeHtml(type.toUpperCase())} RECON</div>`;
+    html += `<div class="dossier-badges">` + badges.map(b =>
+      `<span class="badge-pill pill-${b.variant}">${escapeHtml(b.text)}</span>`
+    ).join('') + `</div>`;
+    html += `</div>`; // dossier-info
+    html += `</div>`; // dossier-head
+    if (rows && rows.length) {
+      html += `<table class="dossier-table">` + rows.map(([k, v]) =>
+        `<tr><td class="dossier-table-key">${escapeHtml(k)}</td><td class="dossier-table-val">${escapeHtml(String(v))}</td></tr>`
+      ).join('') + `</table>`;
+    }
+    html += `</div>`; // dossier
+    return html;
+  }
+
+  // ── Platform results table (used for username `found` + per-variation found lists) ──
+  function buildPlatformTable(pairs) {
+    if (!pairs || pairs.length === 0) {
+      return '<div class="r-miss">no accounts found</div>';
+    }
+    let html = `<div class="platform-table-wrap"><table class="platform-table">
+      <thead><tr><th>Platform</th><th>Link</th></tr></thead><tbody>`;
+    pairs.forEach(([site, url]) => {
+      html += `<tr class="platform-row">
+        <td class="platform-cell">
+          <div class="platform-cell-inner">
+            <span class="platform-icon">${getPlatformIcon(site)}</span>
+            <span class="platform-name">${escapeHtml(site)}</span>
+          </div>
+        </td>
+        <td class="platform-link-cell">
+          <div class="platform-link-inner">
+            <a class="platform-link" href="${url}" target="_blank">${escapeHtml(url)}</a>
+            <span class="badge-pill pill-green">FOUND</span>
+          </div>
+        </td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+    return html;
+  }
+
+  // ── Summary links panel: two-column key/value grid ─────────────────────
+  function buildSummaryGrid(rows) {
+    return `<div class="summary-grid">` + rows.map(([k, v]) =>
+      `<div class="summary-key">${escapeHtml(k)}</div><div class="summary-val">${escapeHtml(String(v))}</div>`
+    ).join('') + `</div>`;
+  }
+
+  // ── Donut chart (pure SVG, stroke-dasharray segments) ───────────────────
+  function donutSvg(segments, centerText, size) {
+    size = size || 110;
+    const r = size / 2 - 12;
+    const c = 2 * Math.PI * r;
+    const cx = size / 2, cy = size / 2;
+    let cum = 0;
+    const arcs = segments.map(seg => {
+      const len = Math.max(0, (seg.pct / 100) * c);
+      const dasharray = `${len.toFixed(2)} ${(c - len).toFixed(2)}`;
+      const dashoffset = -cum;
+      cum += len;
+      return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="12"
+        style="stroke:${seg.color}" stroke-dasharray="${dasharray}" stroke-dashoffset="${dashoffset}"
+        transform="rotate(-90 ${cx} ${cy})"/>`;
+    }).join('');
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+      ${arcs}
+      <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central" class="donut-center-text">${escapeHtml(String(centerText))}</text>
+    </svg>`;
+  }
+
+  function buildDonutBlock(title, segments, centerText, legendItems) {
+    return `<div class="donut-block">
+      <div class="donut-title">${escapeHtml(title)}</div>
+      ${donutSvg(segments, centerText)}
+      <div class="donut-legend">${legendItems.map(li =>
+        `<div class="legend-item"><span class="legend-swatch" style="background:${li.color}"></span>${escapeHtml(li.label)} (${li.count})</div>`
+      ).join('')}</div>
+    </div>`;
+  }
+
+  // foundCount/checkedCount drive the hit-rate donut; foundPairs (site,url list) drives
+  // the category-breakdown donut — both are real counts already present in the result data.
+  function buildDossierSummary(foundCount, checkedCount, foundPairs) {
+    const hitRate = checkedCount > 0 ? (foundCount / checkedCount * 100) : 0;
+    const segA = [
+      { pct: hitRate, color: 'var(--green)' },
+      { pct: 100 - hitRate, color: 'var(--border)' },
+    ];
+
+    const devKeys = ['github', 'gitlab', 'keybase'];
+    const socialKeys = ['instagram', 'twitter', 'facebook', 'tiktok', 'reddit', 'snapchat'];
+    const cats = { Dev: 0, Social: 0, Other: 0 };
+    foundPairs.forEach(([site]) => {
+      const low = site.toLowerCase();
+      if (devKeys.some(k => low.includes(k))) cats.Dev++;
+      else if (socialKeys.some(k => low.includes(k))) cats.Social++;
+      else cats.Other++;
+    });
+    const totalFound = foundPairs.length;
+    const catColors = { Dev: 'var(--green)', Social: 'var(--cyan)', Other: 'var(--yellow)' };
+    const segB = totalFound > 0
+      ? Object.keys(cats).filter(k => cats[k] > 0).map(k => ({ pct: cats[k] / totalFound * 100, color: catColors[k] }))
+      : [{ pct: 100, color: 'var(--border)' }];
+
+    return `<div class="dossier-summary">
+      <div class="r-section">dossier summary</div>
+      <div class="donut-row">
+        ${buildDonutBlock('Found vs Not Found', segA, hitRate.toFixed(1) + '%', [
+          { color: 'var(--green)', label: 'Found', count: foundCount },
+          { color: 'var(--border)', label: 'Not Found', count: checkedCount - foundCount },
+        ])}
+        ${buildDonutBlock('Platform Categories', segB, totalFound, Object.keys(cats).map(k =>
+          ({ color: catColors[k], label: k, count: cats[k] })
+        ))}
+      </div>
+    </div>`;
+  }
+
   // Show/hide the AI tab based on whether GROQ_API_KEY is configured
   async function checkAiStatus() {
     try {
@@ -653,26 +982,51 @@ INDEX_HTML = """<!DOCTYPE html>
     if (data.type === 'username') {
       const found = r.found || [];
       const miss  = r.not_found || [];
+      const checked = found.length + miss.length;
+      const hitRate = checked > 0 ? (found.length / checked * 100) : 0;
+
+      html += buildDossierCard('username', data.query, [
+        { text: 'USERNAME', variant: 'cyan' },
+        { text: `${found.length} FOUND`, variant: 'green' },
+        { text: `${miss.length} NOT FOUND`, variant: 'red' },
+      ], [
+        ['Query', data.query],
+        ['Platforms Checked', checked],
+      ]);
+
       html += `<div class="r-section">found (${found.length})</div>`;
-      if (found.length === 0) {
-        html += `<div class="r-miss">no accounts found</div>`;
-      } else {
-        found.forEach(([site, url]) => {
-          html += `<div class="r-row">
-            <span class="r-badge badge-found">FOUND</span>
-            <span class="r-key">${site}</span>
-            <a class="r-link" href="${url}" target="_blank">${url}</a>
-          </div>`;
-        });
-      }
+      html += buildPlatformTable(found);
+
       html += `<div class="r-section">not found (${miss.length})</div>`;
       html += `<div class="r-miss">${miss.join(' · ') || 'none'}</div>`;
+
+      html += buildSummaryGrid([
+        ['Query', data.query],
+        ['Platforms Checked', checked],
+        ['Found', found.length],
+        ['Not Found', miss.length],
+        ['Hit Rate %', hitRate.toFixed(1) + '%'],
+      ]);
+
+      html += buildDossierSummary(found.length, checked, found);
 
     } else if (data.type === 'name') {
       const variations = r.variations_results || {};
       const dorks       = r.dork_links || [];
       const allKeys     = Object.keys(variations);
       const hits        = allKeys.filter(k => (variations[k] || []).length > 0);
+      const allFoundPairs = [];
+      allKeys.forEach(k => (variations[k] || []).forEach(pair => allFoundPairs.push(pair)));
+      const hitRate = allKeys.length > 0 ? (hits.length / allKeys.length * 100) : 0;
+
+      html += buildDossierCard('name', data.query, [
+        { text: 'NAME', variant: 'cyan' },
+        { text: `${hits.length} VARIATIONS W/ HITS`, variant: 'green' },
+        { text: `${allKeys.length - hits.length} NO HITS`, variant: 'red' },
+      ], [
+        ['Query', data.query],
+        ['Variations Searched', allKeys.length],
+      ]);
 
       html += `<div class="r-info">${allKeys.length} variations searched, ${hits.length} had hits</div>`;
 
@@ -687,15 +1041,19 @@ INDEX_HTML = """<!DOCTYPE html>
       } else {
         hits.forEach(variation => {
           html += `<div class="r-key" style="margin-top:10px">${variation}</div>`;
-          variations[variation].forEach(([site, url]) => {
-            html += `<div class="r-row">
-              <span class="r-badge badge-found">FOUND</span>
-              <span class="r-key">${site}</span>
-              <a class="r-link" href="${url}" target="_blank">${url}</a>
-            </div>`;
-          });
+          html += buildPlatformTable(variations[variation]);
         });
       }
+
+      html += buildSummaryGrid([
+        ['Query', data.query],
+        ['Variations Searched', allKeys.length],
+        ['Variations w/ Hits', hits.length],
+        ['Dork Queries', dorks.length],
+        ['Hit Rate %', hitRate.toFixed(1) + '%'],
+      ]);
+
+      html += buildDossierSummary(hits.length, allKeys.length, allFoundPairs);
 
     } else if (data.type === 'ip') {
       const info = r.ipinfo || {};

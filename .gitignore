@@ -4,3 +4,13 @@ __pycache__/
 *.pyc
 *.bak*
 templates/
+venv/
+
+# editor / AI tool local config
+.claude/
+.vscode/
+.idea/
+
+# OS cruft
+.DS_Store
+Thumbs.db
