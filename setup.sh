@@ -23,6 +23,24 @@ echo "[*] Installing Flask..."
 "$VENV_DIR/bin/pip" install --upgrade pip
 "$VENV_DIR/bin/pip" install flask
 
+ENV_FILE="$PROJECT_DIR/.env"
+if [ -f "$ENV_FILE" ] && grep -q '^GROQ_API_KEY=' "$ENV_FILE"; then
+    echo "[*] Existing GROQ_API_KEY found in .env, keeping it."
+elif [ -t 0 ]; then
+    echo "[*] Optional: Groq API key enables the AI tab (dossiers, query parsing)."
+    echo "    Get a free one at https://console.groq.com/keys — leave blank to skip."
+    read -rp "    GROQ_API_KEY: " GROQ_KEY
+    if [ -n "$GROQ_KEY" ]; then
+        echo "GROQ_API_KEY=$GROQ_KEY" > "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+        echo "[+] Saved to $ENV_FILE"
+    else
+        echo "[*] Skipped — add GROQ_API_KEY to $ENV_FILE later to enable AI features."
+    fi
+else
+    echo "[*] No .env and no terminal to prompt — skipping Groq key (AI tab stays disabled)."
+fi
+
 echo "[*] Creating systemd service..."
 sudo tee /etc/systemd/system/osintbox.service > /dev/null <<EOF
 [Unit]
