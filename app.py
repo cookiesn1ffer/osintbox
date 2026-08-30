@@ -8,7 +8,7 @@ DB = os.path.join(os.path.dirname(__file__), 'osint.db')
 
 # ── Groq AI config ───────────────────────────────────────────────────────────
 GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
-GROQ_MODEL = 'llama-3.3-70b-versatile'
+GROQ_MODEL = 'openai/gpt-oss-120b'
 
 def load_groq_key():
     env_path = os.path.join(os.path.dirname(__file__), '.env')
