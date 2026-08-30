@@ -12,16 +12,21 @@ OSINTBox is a self-hosted OSINT platform with six recon modules, a dark terminal
 
 | Module           | What it does                                        |
 | ---------------- | ---------------------------------------------------- |
-| Username Search  | Find accounts across 19 platforms by username         |
-| Name Search      | Username variations + Google dork links from a name   |
-| IP / Host Lookup | Resolve IPs, reverse DNS, geolocation                  |
-| Domain Recon     | WHOIS, DNS records, subdomains via crt.sh              |
-| Email Analysis   | Format validation, MX lookup, Gravatar check           |
-| Phone Parsing    | Country/format detection, Truecaller/Sync.me links     |
+| Username Search  | Find accounts across 19 platforms by username, checked concurrently |
+| Name Search      | Username guesses built strictly from the name's own tokens (first/middle/last), each hit verified against the matched page's content before it counts, plus Google dork links |
+| IP / Host Lookup | Resolve IPs, reverse DNS, geolocation, ASN/netblock (Team Cymru), RDAP org/abuse contact, optional AbuseIPDB/VirusTotal reputation |
+| Domain Recon     | WHOIS, DNS records, subdomains (crt.sh + a common-prefix wordlist brute force), Wayback Machine history, optional VirusTotal reputation |
+| Email Analysis   | Format validation, MX lookup, Gravatar check, PGP keyserver lookup, optional HaveIBeenPwned breach check |
+| Phone Parsing    | Carrier, line type (mobile/landline/VoIP), region, and validity via libphonenumber, plus Truecaller/Sync.me links |
 
 Username and name results render as a recon dashboard: a target identity card with status
 pills, a platform-by-platform table with site icons, a summary stats grid, and donut charts
 breaking down hit rate and platform category (dev / social / other).
+
+Every search can be exported as a **findings report** (`.txt` or `.pdf`) — the automated
+results for that target plus the full 10-category OSINT methodology checklist (domains, IPs,
+emails, usernames, social media, people, companies, phone numbers, images, documents) as
+manual-follow-up reference for whatever this tool doesn't automate.
 
 Every query is logged to a local SQLite history you can revisit later.
 
@@ -33,6 +38,17 @@ Add a Groq API key and two more features unlock:
 - **ANALYZE button** — turns any result into a written dossier with suggested next targets to chain into.
 
 Without a key, the rest of the app works exactly the same — these two features just stay hidden.
+
+### Optional: extra lookups
+
+A few more lookups are gated behind their own optional key in `.env`, same pattern as Groq —
+add the key to unlock, leave it out and that field just doesn't appear:
+
+```
+VT_API_KEY=your_virustotal_key          # free tier — IP/domain reputation
+ABUSEIPDB_API_KEY=your_abuseipdb_key    # free tier — IP abuse reports
+HIBP_API_KEY=your_hibp_key              # paid only (~$4.39/mo+) — email breach check
+```
 
 ---
 
@@ -46,7 +62,7 @@ cd osintbox
 python -m venv venv
 venv\Scripts\activate      # Windows
 source venv/bin/activate   # Linux
-pip install flask
+pip install flask phonenumbers fpdf2
 python app.py
 ```
 

@@ -1,33 +1,42 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import sqlite3, subprocess, socket, json, re, urllib.request, urllib.error, urllib.parse, hashlib
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import phonenumbers
+from phonenumbers import carrier as phone_carrier, geocoder as phone_geocoder, PhoneNumberType
+from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 import os
 
 app = Flask(__name__)
 DB = os.path.join(os.path.dirname(__file__), 'osint.db')
 
-# ── Groq AI config ───────────────────────────────────────────────────────────
+# ── Optional API keys (.env) ─────────────────────────────────────────────────
 GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
 GROQ_MODEL = 'openai/gpt-oss-120b'
 
-def load_groq_key():
+def load_env_file():
     env_path = os.path.join(os.path.dirname(__file__), '.env')
     if not os.path.exists(env_path):
-        return ''
+        return {}
     lines = [l.strip() for l in open(env_path).read().splitlines()
              if l.strip() and not l.strip().startswith('#')]
+    env = {}
     for line in lines:
         if '=' in line:
             k, v = line.split('=', 1)
-            if k.strip() == 'GROQ_API_KEY':
-                return v.strip().strip('"').strip("'")
-    # fall back to a bare key with no GROQ_API_KEY= prefix
+            env[k.strip()] = v.strip().strip('"').strip("'")
+    # Back-compat: a .env containing a single bare line with no `KEY=` prefix
+    # is treated as a legacy GROQ_API_KEY (the original .env format this app shipped with).
     if len(lines) == 1 and '=' not in lines[0]:
-        return lines[0]
-    return ''
+        env.setdefault('GROQ_API_KEY', lines[0])
+    return env
 
-GROQ_API_KEY = load_groq_key()
+_ENV = load_env_file()
+GROQ_API_KEY      = _ENV.get('GROQ_API_KEY', '')
+HIBP_API_KEY      = _ENV.get('HIBP_API_KEY', '')       # haveibeenpwned.com/API/v3 — paid key required
+VT_API_KEY        = _ENV.get('VT_API_KEY', '')         # virustotal.com — has a free tier
+ABUSEIPDB_API_KEY = _ENV.get('ABUSEIPDB_API_KEY', '')  # abuseipdb.com — has a free tier
 
 def call_groq(messages, max_tokens=800, temperature=0.3):
     if not GROQ_API_KEY:
@@ -353,6 +362,23 @@ INDEX_HTML = """<!DOCTYPE html>
   .analyze-btn:hover { background: rgba(0,212,255,0.12); }
   .analyze-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+  .report-btn {
+    margin-left: 6px;
+    padding: 4px 12px;
+    background: transparent;
+    border: 1px solid var(--green);
+    border-radius: 3px;
+    color: var(--green);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.15s;
+  }
+  .report-btn:hover { background: rgba(0,255,136,0.12); }
+
   /* ── AI analysis panel ── */
   .ai-panel {
     border-top: 1px solid rgba(0,212,255,0.3);
@@ -662,6 +688,8 @@ INDEX_HTML = """<!DOCTYPE html>
       </div>
       <span class="terminal-title" id="termTitle">output</span>
       <button class="analyze-btn" id="analyzeBtn" style="display:none" onclick="analyzeResult()">ANALYZE</button>
+      <a class="report-btn" id="reportTxtBtn" style="display:none" href="#" target="_blank">REPORT .TXT</a>
+      <a class="report-btn" id="reportPdfBtn" style="display:none" href="#" target="_blank">REPORT .PDF</a>
     </div>
     <div class="terminal-body" id="termBody"></div>
     <div class="ai-panel" id="aiPanel" style="display:none">
@@ -911,6 +939,7 @@ INDEX_HTML = """<!DOCTYPE html>
     title.textContent = `${activeType} :: ${query}`;
     body.innerHTML = `<span class="spinner"></span><span class="r-info">running recon on <span class="r-key">${query}</span>...</span>`;
     analyzeBtn.style.display = 'none';
+    showReportButtons(null);
     hideAiPanel();
     lastSearchData = null;
 
@@ -934,6 +963,7 @@ INDEX_HTML = """<!DOCTYPE html>
         if (data.result) {
           lastSearchData = data;
           analyzeBtn.style.display = '';
+          showReportButtons(data.id);
         }
       }
       loadHistory();
@@ -1070,6 +1100,40 @@ INDEX_HTML = """<!DOCTYPE html>
         html += row('Coords', `<a class="r-link" href="https://maps.google.com/?q=${info.loc}" target="_blank">${info.loc}</a>`);
       }
 
+      const asn = r.asn_info || {};
+      if (asn.asn) {
+        html += `<div class="r-section">asn / netblock (Team Cymru)</div>`;
+        html += row('ASN',        'AS' + asn.asn + ' — ' + (asn.as_name || ''));
+        html += row('BGP Prefix', asn.bgp_prefix);
+        html += row('Registry',   (asn.registry || '').toUpperCase());
+        html += row('Allocated',  asn.allocated);
+      }
+
+      html += `<div class="r-section">rdap</div>`;
+      html += row('Org (RDAP)',   r.rdap_name);
+      html += row('Abuse Email',  r.rdap_abuse_email);
+
+      if (r.abuseipdb) {
+        html += `<div class="r-section">abuseipdb reputation</div>`;
+        html += row('Abuse Score', r.abuseipdb.score + ' / 100');
+        html += row('Reports',     r.abuseipdb.reports);
+        html += row('ISP',         r.abuseipdb.isp);
+        html += row('Usage Type',  r.abuseipdb.usage_type);
+      } else if (r.abuseipdb_error) {
+        html += `<div class="r-error" style="margin-top:6px">AbuseIPDB: ${escapeHtml(r.abuseipdb_error)}</div>`;
+      }
+
+      if (r.virustotal) {
+        const stats = r.virustotal.stats || {};
+        html += `<div class="r-section">virustotal reputation</div>`;
+        html += row('Malicious',  stats.malicious);
+        html += row('Suspicious', stats.suspicious);
+        html += row('Harmless',   stats.harmless);
+        html += row('Reputation', r.virustotal.reputation);
+      } else if (r.virustotal_error) {
+        html += `<div class="r-error" style="margin-top:6px">VirusTotal: ${escapeHtml(r.virustotal_error)}</div>`;
+      }
+
     } else if (data.type === 'domain') {
       html += `<div class="r-section">whois</div>`;
       html += `<pre style="color:var(--text);font-size:11px;white-space:pre-wrap">${r.whois || 'N/A'}</pre>`;
@@ -1077,13 +1141,32 @@ INDEX_HTML = """<!DOCTYPE html>
       ['A','MX','TXT','NS','CNAME'].forEach(t => {
         html += row(`DNS ${t}`, r[`dns_${t}`]);
       });
-      html += `<div class="r-section">subdomains via crt.sh (${(r.subdomains||[]).length})</div>`;
+      html += `<div class="r-section">subdomains (crt.sh + wordlist) (${(r.subdomains||[]).length})</div>`;
       if (r.subdomains && r.subdomains.length > 0) {
         html += r.subdomains.map(s =>
           `<div class="r-found">· ${s}</div>`
         ).join('');
       } else {
         html += `<div class="r-miss">none found</div>`;
+      }
+
+      if (r.wayback) {
+        html += `<div class="r-section">wayback machine</div>`;
+        html += row('Archived', r.wayback.archived ? '✓ yes' : 'no snapshots found');
+        if (r.wayback.archived) {
+          html += row('Closest Snapshot', `<a class="r-link" href="${r.wayback.snapshot_url}" target="_blank">${r.wayback.timestamp}</a>`);
+        }
+      }
+
+      if (r.virustotal) {
+        const stats = r.virustotal.stats || {};
+        html += `<div class="r-section">virustotal reputation</div>`;
+        html += row('Malicious',  stats.malicious);
+        html += row('Suspicious', stats.suspicious);
+        html += row('Harmless',   stats.harmless);
+        html += row('Reputation', r.virustotal.reputation);
+      } else if (r.virustotal_error) {
+        html += `<div class="r-error" style="margin-top:6px">VirusTotal: ${escapeHtml(r.virustotal_error)}</div>`;
       }
 
     } else if (data.type === 'email') {
@@ -1093,13 +1176,30 @@ INDEX_HTML = """<!DOCTYPE html>
       html += row('Gravatar',       r.gravatar_found
         ? `<a class="r-link" href="${r.gravatar}" target="_blank">${r.gravatar}</a>`
         : 'not found');
-      html += `<div class="r-info" style="margin-top:10px">${r.hibp_note}</div>`;
+      html += row('PGP Key',        r.pgp_key_found === true
+        ? `<a class="r-link" href="${r.pgp_lookup_url}" target="_blank">found on keys.openpgp.org</a>`
+        : (r.pgp_key_found === false ? 'not found' : 'lookup unavailable'));
+
+      if (r.hibp_breaches) {
+        html += `<div class="r-section">haveibeenpwned breaches (${r.hibp_breaches.length})</div>`;
+        html += r.hibp_breaches.length > 0
+          ? r.hibp_breaches.map(b => `<div class="r-found">· ${escapeHtml(b)}</div>`).join('')
+          : `<div class="r-miss">no breaches found</div>`;
+      } else if (r.hibp_error) {
+        html += `<div class="r-error" style="margin-top:6px">HIBP: ${escapeHtml(r.hibp_error)}</div>`;
+      } else if (r.hibp_note) {
+        html += `<div class="r-info" style="margin-top:10px">${escapeHtml(r.hibp_note)}</div>`;
+      }
 
     } else if (data.type === 'phone') {
-      html += row('Cleaned',   r.cleaned);
-      html += row('Length',    r.length);
-      html += row('Country',   r.country);
-      html += row('Number',    r.number);
+      html += row('Cleaned',    r.cleaned);
+      html += row('Valid',      r.valid === undefined ? undefined : (r.valid ? '✓ yes' : '✗ no'));
+      html += row('Country',    r.country);
+      html += row('Number',     r.number);
+      html += row('Carrier',    r.carrier);
+      html += row('Line Type',  r.line_type);
+      html += row('Location',   r.location);
+      if (r.error) html += `<div class="r-error" style="margin-top:6px">${escapeHtml(r.error)}</div>`;
       html += `<div class="r-section">search links</div>`;
       html += `<div><a class="r-link" href="${r.truecaller_link}" target="_blank">→ Truecaller</a></div>`;
       html += `<div><a class="r-link" href="${r.sync_me_link}" target="_blank">→ Sync.me</a></div>`;
@@ -1116,6 +1216,20 @@ INDEX_HTML = """<!DOCTYPE html>
   function hideAiPanel() {
     document.getElementById('aiPanel').style.display = 'none';
     document.getElementById('aiPanelBody').innerHTML = '';
+  }
+
+  function showReportButtons(id) {
+    const txtBtn = document.getElementById('reportTxtBtn');
+    const pdfBtn = document.getElementById('reportPdfBtn');
+    if (id) {
+      txtBtn.href = `/report/${id}.txt`;
+      pdfBtn.href = `/report/${id}.pdf`;
+      txtBtn.style.display = 'inline-block';
+      pdfBtn.style.display = 'inline-block';
+    } else {
+      txtBtn.style.display = 'none';
+      pdfBtn.style.display = 'none';
+    }
   }
 
   // Tab type returned by Groq -> the matching type-tab
@@ -1252,6 +1366,7 @@ INDEX_HTML = """<!DOCTYPE html>
       term.classList.add('visible');
       title.textContent = `${data.type} :: ${data.query} [history]`;
       renderResult(data, body);
+      showReportButtons(id);
       window.scrollTo({ top: 200, behavior: 'smooth' });
     } catch(e) {}
   }
@@ -1276,8 +1391,9 @@ init_db()
 
 def save_result(qtype, query, result):
     with sqlite3.connect(DB) as c:
-        c.execute('INSERT INTO queries (type,query,result) VALUES (?,?,?)',
-                  (qtype, query, result))
+        cur = c.execute('INSERT INTO queries (type,query,result) VALUES (?,?,?)',
+                        (qtype, query, result))
+        return cur.lastrowid
 
 # ── OSINT modules ─────────────────────────────────────────────────────────────
 
@@ -1420,25 +1536,33 @@ def check_username(username, capture_bodies=False):
     return found, not_found
 
 def generate_username_variations(full_name):
-    parts = full_name.strip().split()
-    first = parts[0] if parts else ''
-    last = parts[-1] if len(parts) > 1 else ''
+    # Every guess is built only from the target's own name tokens — no generic
+    # numeric suffixes (aarush1, aarush007, ...) — so a hit stays tied to the
+    # actual name instead of drifting into unrelated coincidental handles.
+    tokens = [t for t in full_name.strip().split() if t]
+    if not tokens:
+        return []
 
-    f, l = first.lower(), last.lower()
-    fc, lc = first.capitalize(), last.capitalize()
+    first = tokens[0]
+    last = tokens[-1] if len(tokens) > 1 else ''
+    middles = tokens[1:-1] if len(tokens) > 2 else []
+
+    forms = [[first]]
+    if last:
+        forms.append([first, last])              # first + last
+        forms.append([last, first])               # last + first
+        forms.append([first[0], last])            # initial + last
+        forms.append([first, last[0]])             # first + initial
+    if middles and last:
+        forms.append([first] + middles + [last])                  # first + middle(s) + last
+        forms.append([first] + [m[0] for m in middles] + [last])  # first + middle initial(s) + last
 
     variations = []
-    if last:
-        variations.append(fc + lc)             # AarushPradip
-        variations.append(f + '_' + l)         # aarush_pradip
-        variations.append(f + '.' + l)         # aarush.pradip
-        variations.append(l + fc)              # pradipAarush
-        variations.append(f + l[0].upper())    # aarushP
-        variations.append(f[0] + lc)           # aPradip
-    variations.append(f)                       # aarush
-    variations.append(f + '1')
-    variations.append(f + '123')
-    variations.append(f + '007')
+    for seq in forms:
+        variations.append(''.join(w.capitalize() for w in seq))   # AarushPradip
+        variations.append(''.join(w.lower() for w in seq))        # aarushpradip
+        variations.append('_'.join(w.lower() for w in seq))       # aarush_pradip
+        variations.append('.'.join(w.lower() for w in seq))       # aarush.pradip
 
     seen, result = set(), []
     for v in variations:
@@ -1462,30 +1586,44 @@ def generate_dork_links(full_name):
         {"label": "India",      "url": search_url(f'{name_q} India')},
         {"label": "Email",      "url": search_url(f'{name_q} email')},
         {"label": "Phone",      "url": search_url(f'{name_q} phone')},
+        {"label": "Truecaller", "url": search_url(f'site:truecaller.com {name_q}')},
+        {"label": "Facebook",   "url": search_url(f'site:facebook.com {name_q}')},
     ]
 
 def name_matches_body(body, full_name):
     # A bare username match (e.g. "aneek") is often a coincidental handle taken
     # by an unrelated account on a billion-user platform, not the actual target.
-    # Require every part of the target's name to appear in the fetched profile
+    # Require the target's first + last name to appear in the fetched profile
     # page (display name / bio / JSON-LD) before counting it as a real hit.
+    # Middle names are excluded from this check since real-world bios routinely
+    # drop them even when the account genuinely belongs to the target.
     # If we have no body to check (e.g. Gravatar, which is a plain 200 check
     # with no page content captured), we can't verify — keep it as-is.
     if body is None:
         return True
-    parts = [p.lower() for p in full_name.strip().split() if p]
-    if not parts:
+    tokens = [p.lower() for p in full_name.strip().split() if p]
+    if not tokens:
         return True
+    core = [tokens[0]] + ([tokens[-1]] if len(tokens) > 1 else [])
     low = body.lower()
-    return all(p in low for p in parts)
+    return all(p in low for p in core)
 
 def name_recon(full_name):
-    variations_results = {}
-    for variation in generate_username_variations(full_name):
+    variations = generate_username_variations(full_name)
+
+    def check_variation(variation):
         found, _, bodies = check_username(variation, capture_bodies=True)
         verified = [(site, url) for site, url in found
                     if name_matches_body(bodies.get(site), full_name)]
-        variations_results[variation] = verified
+        return variation, verified
+
+    # Each variation already fans out ~20 concurrent site checks on its own;
+    # cap outer concurrency low so this doesn't balloon into hundreds of
+    # simultaneous threads on constrained hardware (e.g. a Pi Zero).
+    variations_results = {}
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        for variation, verified in ex.map(check_variation, variations):
+            variations_results[variation] = verified
 
     return {
         'variations_results': variations_results,
@@ -1517,7 +1655,88 @@ def ip_lookup(target):
     except Exception:
         results['reverse_dns'] = 'N/A'
 
+    # ASN / netblock / RIR via Team Cymru's whois ASN-lookup service — a single
+    # free whois query against the existing `whois` binary, no API key needed.
+    try:
+        out = subprocess.check_output(['whois', '-h', 'whois.cymru.com', f' -v {ip}'],
+                                      timeout=8, stderr=subprocess.DEVNULL)
+        lines = [l for l in out.decode(errors='ignore').splitlines() if l.strip()]
+        if len(lines) >= 2:
+            fields = [f.strip() for f in lines[1].split('|')]
+            keys = ['asn', 'ip', 'bgp_prefix', 'country', 'registry', 'allocated', 'as_name']
+            results['asn_info'] = dict(zip(keys, fields))
+        else:
+            results['asn_info'] = {}
+    except Exception:
+        results['asn_info'] = {}
+
+    # RDAP — org/netblock name and (opportunistically) an abuse contact.
+    # RDAP entity structure varies a lot by RIR, so this is best-effort.
+    try:
+        req = urllib.request.Request(f"https://rdap.org/ip/{ip}", headers={'User-Agent': 'Mozilla/5.0'})
+        rdap = json.loads(urllib.request.urlopen(req, timeout=8).read())
+        results['rdap_name'] = rdap.get('name', 'N/A')
+        results['rdap_country'] = rdap.get('country') or 'N/A'
+        abuse_email = None
+        for ent in rdap.get('entities', []):
+            if 'abuse' in (ent.get('roles') or []):
+                for item in (ent.get('vcardArray') or [None, []])[1]:
+                    if item[0] == 'email':
+                        abuse_email = item[3]
+        results['rdap_abuse_email'] = abuse_email or 'N/A'
+    except Exception:
+        results['rdap_name'] = 'N/A'
+        results['rdap_country'] = 'N/A'
+        results['rdap_abuse_email'] = 'N/A'
+
+    # AbuseIPDB reputation (optional — needs ABUSEIPDB_API_KEY in .env, free tier available)
+    if ABUSEIPDB_API_KEY:
+        try:
+            url = f"https://api.abuseipdb.com/api/v2/check?ipAddress={ip}&maxAgeInDays=90"
+            req = urllib.request.Request(url, headers={
+                'Key': ABUSEIPDB_API_KEY, 'Accept': 'application/json',
+            })
+            data = json.loads(urllib.request.urlopen(req, timeout=8).read()).get('data', {})
+            results['abuseipdb'] = {
+                'score': data.get('abuseConfidenceScore'),
+                'reports': data.get('totalReports'),
+                'isp': data.get('isp'),
+                'usage_type': data.get('usageType'),
+                'is_whitelisted': data.get('isWhitelisted'),
+            }
+        except Exception as e:
+            results['abuseipdb_error'] = str(e)
+
+    # VirusTotal IP reputation (optional — needs VT_API_KEY in .env, free tier available)
+    if VT_API_KEY:
+        try:
+            url = f"https://www.virustotal.com/api/v3/ip_addresses/{ip}"
+            req = urllib.request.Request(url, headers={'x-apikey': VT_API_KEY})
+            data = json.loads(urllib.request.urlopen(req, timeout=8).read())
+            attrs = data.get('data', {}).get('attributes', {})
+            results['virustotal'] = {
+                'stats': attrs.get('last_analysis_stats'),
+                'reputation': attrs.get('reputation'),
+            }
+        except Exception as e:
+            results['virustotal_error'] = str(e)
+
     return results
+
+COMMON_SUBDOMAINS = [
+    'www', 'mail', 'webmail', 'smtp', 'pop', 'imap', 'ftp', 'sftp', 'ssh', 'vpn', 'remote',
+    'admin', 'administrator', 'portal', 'dev', 'develop', 'staging', 'stage', 'test', 'testing', 'uat',
+    'api', 'api-dev', 'app', 'apps', 'cdn', 'static', 'assets', 'img', 'images', 'media',
+    'blog', 'shop', 'store', 'secure', 'login', 'sso', 'auth',
+    'git', 'gitlab', 'jenkins', 'ci', 'jira', 'confluence', 'wiki', 'docs',
+    'support', 'help', 'status', 'monitor', 'grafana', 'kibana',
+    'db', 'database', 'mysql', 'redis', 'cache',
+    'ns1', 'ns2', 'mx', 'mx1', 'autodiscover', 'owa', 'exchange',
+    'cpanel', 'whm', 'webdisk', 'ns', 'dns',
+    'm', 'mobile', 'beta', 'alpha', 'demo', 'sandbox',
+    'internal', 'intranet', 'extranet', 'partners',
+    'files', 'download', 'downloads', 'upload', 'backup', 'old', 'new',
+]
 
 def domain_recon(domain):
     results = {}
@@ -1545,18 +1764,64 @@ def domain_recon(domain):
             results[f'dns_{rtype}'] = 'Error'
 
     # crt.sh cert transparency
+    crt_subdomains = []
     try:
         url = f"https://crt.sh/?q={urllib.parse.quote(domain)}&output=json"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         data = json.loads(urllib.request.urlopen(req, timeout=8).read())
-        subdomains = sorted(set(
-            entry['name_value'].replace('*.', '')
-            for entry in data
-            if 'name_value' in entry
-        ))[:30]
-        results['subdomains'] = subdomains
-    except Exception as e:
-        results['subdomains'] = [f'Error: {e}']
+        crt_subdomains = [entry['name_value'].replace('*.', '')
+                           for entry in data if 'name_value' in entry]
+    except Exception:
+        pass
+
+    # Dictionary-based subdomain brute force against a common-prefix wordlist,
+    # resolved concurrently via `dig` — catches live subdomains that were never
+    # issued a cert, so never show up in crt.sh's certificate-transparency data.
+    def resolve_sub(sub):
+        fqdn = f"{sub}.{domain}"
+        try:
+            out = subprocess.check_output(['dig', '+short', 'A', fqdn],
+                                          timeout=4, stderr=subprocess.DEVNULL)
+            return fqdn if out.decode(errors='ignore').strip() else None
+        except Exception:
+            return None
+
+    brute_subdomains = []
+    with ThreadPoolExecutor(max_workers=15) as ex:
+        for r in ex.map(resolve_sub, COMMON_SUBDOMAINS):
+            if r:
+                brute_subdomains.append(r)
+
+    results['subdomains'] = sorted(set(crt_subdomains) | set(brute_subdomains))[:60]
+
+    # Wayback Machine — earliest/most recent archived snapshot, free/no key.
+    try:
+        url = f"https://archive.org/wayback/available?url={urllib.parse.quote(domain)}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        data = json.loads(urllib.request.urlopen(req, timeout=8).read())
+        closest = data.get('archived_snapshots', {}).get('closest')
+        results['wayback'] = {
+            'archived': bool(closest),
+            'snapshot_url': closest.get('url') if closest else None,
+            'timestamp': closest.get('timestamp') if closest else None,
+        }
+    except Exception:
+        results['wayback'] = {'archived': False, 'snapshot_url': None, 'timestamp': None}
+
+    # VirusTotal domain reputation (optional — needs VT_API_KEY in .env, free tier available)
+    if VT_API_KEY:
+        try:
+            url = f"https://www.virustotal.com/api/v3/domains/{urllib.parse.quote(domain)}"
+            req = urllib.request.Request(url, headers={'x-apikey': VT_API_KEY})
+            data = json.loads(urllib.request.urlopen(req, timeout=8).read())
+            attrs = data.get('data', {}).get('attributes', {})
+            results['virustotal'] = {
+                'stats': attrs.get('last_analysis_stats'),
+                'reputation': attrs.get('reputation'),
+                'categories': attrs.get('categories'),
+            }
+        except Exception as e:
+            results['virustotal_error'] = str(e)
 
     return results
 
@@ -1600,32 +1865,351 @@ def email_recon(email):
     except Exception:
         results['gravatar_found'] = False
 
-    results['hibp_note'] = 'HaveIBeenPwned requires API key — add in settings'
+    # PGP keyserver lookup — free, no key needed. A 200 response body is an
+    # ASCII-armored public key; a 404 just means no key is registered there.
+    try:
+        url = f"https://keys.openpgp.org/vks/v1/by-email/{urllib.parse.quote(email)}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        urllib.request.urlopen(req, timeout=8)
+        results['pgp_key_found'] = True
+        results['pgp_lookup_url'] = f"https://keys.openpgp.org/search?q={urllib.parse.quote(email)}"
+    except urllib.error.HTTPError as e:
+        results['pgp_key_found'] = False if e.code == 404 else None
+    except Exception:
+        results['pgp_key_found'] = None
+
+    # HaveIBeenPwned breach check (optional — needs a paid HIBP_API_KEY in .env;
+    # HIBP discontinued free access to the account/breach-check endpoint in 2019).
+    if HIBP_API_KEY:
+        try:
+            url = f"https://haveibeenpwned.com/api/v3/breachedaccount/{urllib.parse.quote(email)}?truncateResponse=true"
+            req = urllib.request.Request(url, headers={
+                'hibp-api-key': HIBP_API_KEY,
+                'User-Agent': 'osintbox',
+            })
+            data = json.loads(urllib.request.urlopen(req, timeout=8).read())
+            results['hibp_breaches'] = [b.get('Name') for b in data]
+        except urllib.error.HTTPError as e:
+            results['hibp_breaches'] = [] if e.code == 404 else None
+            if e.code != 404:
+                results['hibp_error'] = f'HIBP API error {e.code}'
+        except Exception as e:
+            results['hibp_error'] = str(e)
+    else:
+        results['hibp_note'] = 'HaveIBeenPwned requires a paid API key — add HIBP_API_KEY to .env'
 
     return results
+
+LINE_TYPE_NAMES = {
+    PhoneNumberType.MOBILE: 'Mobile',
+    PhoneNumberType.FIXED_LINE: 'Fixed line',
+    PhoneNumberType.FIXED_LINE_OR_MOBILE: 'Fixed line or mobile',
+    PhoneNumberType.TOLL_FREE: 'Toll-free',
+    PhoneNumberType.PREMIUM_RATE: 'Premium rate',
+    PhoneNumberType.SHARED_COST: 'Shared cost',
+    PhoneNumberType.VOIP: 'VoIP',
+    PhoneNumberType.PERSONAL_NUMBER: 'Personal number',
+    PhoneNumberType.PAGER: 'Pager',
+    PhoneNumberType.UAN: 'UAN',
+    PhoneNumberType.VOICEMAIL: 'Voicemail',
+    PhoneNumberType.UNKNOWN: 'Unknown',
+}
 
 def phone_lookup(phone):
     results = {}
-    # Basic formatting analysis
-    clean = re.sub(r'[\s\-\(\)\+]', '', phone)
-    results['cleaned'] = clean
-    results['length'] = len(clean)
+    raw = phone.strip()
+    # No country code given -> assume India, matching this tool's existing
+    # India-first defaults (Truecaller India link, "India" name dork, etc.)
+    region_guess = None if raw.startswith('+') else 'IN'
 
-    if clean.startswith('91') and len(clean) == 12:
-        results['country'] = 'India (+91)'
-        results['number'] = clean[2:]
-    elif len(clean) == 10 and clean[0] in '6789':
-        results['country'] = 'India (no country code)'
-        results['number'] = clean
-    else:
-        results['country'] = 'Unknown / International'
-        results['number'] = clean
+    try:
+        parsed = phonenumbers.parse(raw, region_guess)
+        e164 = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
-    # Truecaller search link (manual)
-    results['truecaller_link'] = f"https://www.truecaller.com/search/in/{clean}"
-    results['sync_me_link'] = f"https://sync.me/search/?number={urllib.parse.quote(phone)}"
+        results['cleaned'] = e164
+        results['valid'] = phonenumbers.is_valid_number(parsed)
+        results['country'] = f"{phonenumbers.region_code_for_number(parsed) or 'Unknown'} (+{parsed.country_code})"
+        results['number'] = str(parsed.national_number)
+        # Carrier/geocoder lookups are offline (bundled prefix data), not API calls —
+        # carrier data is sparse for ported-number countries like the US, so it can
+        # legitimately come back empty even for a valid number.
+        results['carrier'] = phone_carrier.name_for_number(parsed, 'en') or 'Unknown / not available for this range'
+        results['line_type'] = LINE_TYPE_NAMES.get(phonenumbers.number_type(parsed), 'Unknown')
+        results['location'] = phone_geocoder.description_for_number(parsed, 'en') or 'N/A'
+        clean_digits = e164.lstrip('+')
+    except phonenumbers.NumberParseException as e:
+        clean_digits = re.sub(r'[\s\-\(\)\+]', '', raw)
+        results['cleaned'] = clean_digits
+        results['country'] = 'Unknown / unparseable'
+        results['number'] = clean_digits
+        results['error'] = f'Could not parse number: {e}'
+
+    results['truecaller_link'] = f"https://www.truecaller.com/search/in/{clean_digits}"
+    results['sync_me_link'] = f"https://sync.me/search/?number={urllib.parse.quote(raw)}"
 
     return results
+
+# ── Findings report (10-category OSINT methodology) ────────────────────────────
+# Each category is (title, [(technique, what_it_gets, caveat), ...]). This is the
+# standard OSINT methodology reference — every report includes it in full so the
+# analyst has concrete next steps for whatever this tool doesn't automate (most
+# jurisdiction-specific / paid-data-broker / active-scanning items never will).
+METHODOLOGY_REFERENCE = [
+    ("1. Domain Names", [
+        ("Current WHOIS", "registrar, creation/expiry dates, registrant contact.", "Verify via ICANN; privacy protection may hide data."),
+        ("Historical WHOIS", "previous owners, changes after incidents.", "Data can be outdated; cross-check dates."),
+        ("DNS records", "A, AAAA, MX, TXT (SPF/DKIM/DMARC), NS.", "Look for misconfigurations; do not alter records."),
+        ("Subdomains", "enumerate with crt.sh, Amass, subfinder.", "Confirm subdomains belong to target; passive only."),
+        ("TLS certificates", "Subject Alternative Names, issuer, validity.", "Expired certs may reveal abandoned infrastructure."),
+    ]),
+    ("2. IP Addresses", [
+        ("ASN & netblock", "owner, abuse contact, peers.", "Verify with RIR databases (ARIN/RIPE/APNIC)."),
+        ("Geolocation", "approximate city/country.", "Cross-check multiple APIs; never treat as exact."),
+        ("Open ports/services", "Shodan/Censys banners, software versions.", "Passive only; active scanning may be illegal without authorization."),
+        ("Reverse DNS", "PTR records reveal hostnames.", "Check historical PTR via passive DNS."),
+        ("Reputation history", "blacklists, malware associations.", "Use VirusTotal/AbuseIPDB; false positives are common."),
+    ]),
+    ("3. Email Addresses", [
+        ("Breach data", "HaveIBeenPwned, DeHashed; passwords, sources.", "Handle breached data ethically; do not reuse passwords."),
+        ("Social media linkage", "search email on platforms that allow lookup.", "Respect platform terms; do not bypass privacy controls."),
+        ("PGP keys", "keyservers may reveal name and linked emails.", "Verify key fingerprint."),
+        ("Gravatar/avatar", "hash email and query Gravatar for profile image, name.", "May expose personal details."),
+        ("MX behavior", "verify deliverability, catch-all settings.", "Avoid sending test emails unless authorized."),
+    ]),
+    ("4. Usernames & Aliases", [
+        ("Account enumeration", "check username across many sites (Sherlock, WhatsMyName).", "Manually confirm hits; false positives occur."),
+        ("Profile creation dates", "shows account longevity; use archive.org for earliest appearances.", "Do not assume identity from age alone."),
+        ("Avatar reuse", "reverse image search avatar to link accounts.", "Check for edited/cropped versions."),
+        ("Naming patterns", "base name, numbers, underscores may predict other usernames.", "Requires additional evidence to attribute to same person."),
+        ("Gaming/forum profiles", "Steam, Reddit, Discord IDs; interests, location.", "Only use publicly visible profile data."),
+    ]),
+    ("5. Social Media Profiles", [
+        ("Post geotags", "check-ins, photo geotags; map patterns over time.", "Locations can be spoofed."),
+        ("Connections/friends", "mutual friends, follower overlap.", "Do not infer private relationships solely from connections."),
+        ("Account metadata", "username change history, bio changes via archive.today.", "Verify timestamps."),
+        ("Engagement patterns", "likes/comments on public posts reveal interests, routines.", "Do not scrape private interactions."),
+        ("Privacy settings", "public vs private, follower requests; note data gaps.", "Never attempt to bypass private accounts."),
+    ]),
+    ("6. People (Individuals)", [
+        ("Public records", "birth, marriage, divorce, property records.", "Respect jurisdiction restrictions; some records require authorization."),
+        ("Court records", "PACER (US), local court sites; civil/criminal cases.", "Verify identity with multiple identifiers."),
+        ("Professional licenses", "medical, legal, engineering boards; status and complaints.", "Confirm with official board databases."),
+        ("Voter registration", "name, address, party affiliation (where public).", "Use only for legitimate location/identity verification."),
+        ("Obituaries/death records", "family members, dates, locations.", "Handle sensitive data with care; useful for genealogy."),
+    ]),
+    ("7. Companies & Organizations", [
+        ("Business registrations", "secretary of state, Companies House; officers, agent, filing history.", "Verify status and registered address."),
+        ("Financial filings", "SEC EDGAR, annual reports, stock announcements; revenue, subsidiaries, risks.", "Cross-check with news sources."),
+        ("Employee directories", "LinkedIn, company website, org charts; key personnel.", "Use public info; do not pretext to gain access."),
+        ("Job postings", "technologies, team expansion, office locations.", "Do not apply solely to gather internal information."),
+        ("Press releases/news", "mergers, acquisitions, product launches, breaches.", "Corroborate with official company sources."),
+    ]),
+    ("8. Phone Numbers", [
+        ("Carrier lookup", "number portability, original carrier, line type (mobile/landline/VoIP).", "Verify with multiple lookup services."),
+        ("VoIP detection", "Google Voice, Skype, Twilio numbers indicate possible throwaway.", "Check provider history."),
+        ("Social media sync", "search phone in social media contact discovery.", "Only with consent or publicly available data."),
+        ("Leaked databases", "phone may link to email/name in breaches.", "Handle breached data responsibly."),
+        ("Messaging apps", "WhatsApp/Telegram profile presence, public last seen, profile photo.", "Do not interact to confirm without authorization."),
+    ]),
+    ("9. Images & Photos", [
+        ("EXIF metadata", "GPS coordinates, camera model, timestamp (exiftool).", "Many platforms strip EXIF; verify original file."),
+        ("Reverse image search", "Google, Yandex, TinEye; find other instances, higher resolution.", "Check for manipulated images."),
+        ("Geolocation clues", "landmarks, signage, vegetation, shadows; use satellite imagery.", "Cross-reference multiple clues before concluding."),
+        ("Image hashes", "perceptual hashes (pHash) to find variants.", "False positives possible; manually review."),
+        ("Facial recognition", "search same face across public images (e.g. PimEyes).", "Respect privacy and legal restrictions; never use for stalking. Not automated by this tool."),
+    ]),
+    ("10. Documents & Metadata", [
+        ("File metadata", "author, software, creation/modification dates, embedded usernames (FOCA/metagoofil).", "Be cautious when downloading files."),
+        ("PDF analysis", "hidden text, annotations, printer dots revealing printer serial/date.", "Use forensic PDF tools."),
+        ("Office documents", "tracked changes, comments, hidden sheets; may contain previous versions.", "Check document properties thoroughly."),
+        ("Web archives", "archived pages, documents, PDFs via Wayback Machine.", "Verify archived content authenticity."),
+        ("Pastebin/paste sites", "leaked documents, code snippets, credentials; use search engines and alerts.", "Do not access stolen data further; report illegal content."),
+    ]),
+]
+
+# Which methodology category a search type's automated findings map to.
+CATEGORY_FOR_TYPE = {'domain': 0, 'ip': 1, 'email': 2, 'username': 3, 'name': 3, 'phone': 7}
+
+def format_findings_text(qtype, query, result):
+    r = result or {}
+    lines = []
+    if qtype == 'username':
+        found, not_found = r.get('found', []), r.get('not_found', [])
+        lines.append(f"Platforms checked: {len(found) + len(not_found)}   Found: {len(found)}")
+        for site, url in found:
+            lines.append(f"  - {site}: {url}")
+        lines.append(f"Not found: {', '.join(not_found) or 'none'}")
+    elif qtype == 'name':
+        variations = r.get('variations_results', {})
+        hits = {k: v for k, v in variations.items() if v}
+        lines.append(f"Username variations searched: {len(variations)}   Verified hits: {len(hits)}")
+        lines.append("(A hit is only counted once the target's name is confirmed present on the matched profile page.)")
+        for variation, pairs in hits.items():
+            lines.append(f"  {variation}:")
+            for site, url in pairs:
+                lines.append(f"    - {site}: {url}")
+        dorks = r.get('dork_links', [])
+        if dorks:
+            lines.append("Dork search links (manual follow-up, including phone-by-name):")
+            for d in dorks:
+                lines.append(f"  - {d['label']}: {d['url']}")
+    elif qtype == 'ip':
+        lines.append(f"Resolved IP: {r.get('resolved_ip')}   Reverse DNS: {r.get('reverse_dns')}")
+        info = r.get('ipinfo', {}) or {}
+        for k in ('city', 'region', 'country', 'org', 'timezone', 'postal', 'loc'):
+            if info.get(k):
+                lines.append(f"  {k.capitalize()}: {info.get(k)}")
+        asn = r.get('asn_info', {}) or {}
+        if asn.get('asn'):
+            lines.append(f"ASN: AS{asn.get('asn')} ({asn.get('as_name')})   "
+                          f"BGP Prefix: {asn.get('bgp_prefix')}   Registry: {(asn.get('registry') or '').upper()}   "
+                          f"Allocated: {asn.get('allocated')}")
+        lines.append(f"RDAP Org: {r.get('rdap_name')}   Abuse Email: {r.get('rdap_abuse_email')}")
+        if r.get('abuseipdb'):
+            a = r['abuseipdb']
+            lines.append(f"AbuseIPDB: score {a.get('score')}/100, {a.get('reports')} reports, ISP {a.get('isp')}, usage {a.get('usage_type')}")
+        if r.get('virustotal'):
+            v = r['virustotal']; stats = v.get('stats') or {}
+            lines.append(f"VirusTotal: malicious={stats.get('malicious')} suspicious={stats.get('suspicious')} "
+                          f"harmless={stats.get('harmless')} reputation={v.get('reputation')}")
+    elif qtype == 'domain':
+        lines.append("WHOIS:")
+        lines.append(r.get('whois', 'N/A'))
+        for t in ('A', 'MX', 'TXT', 'NS', 'CNAME'):
+            lines.append(f"DNS {t}: {r.get('dns_' + t, 'N/A')}")
+        subs = r.get('subdomains', [])
+        lines.append(f"Subdomains found ({len(subs)}, crt.sh + wordlist):")
+        for s in subs:
+            lines.append(f"  - {s}")
+        wb = r.get('wayback', {}) or {}
+        lines.append(f"Wayback archived: {wb.get('archived')}   Closest snapshot: {wb.get('snapshot_url') or 'N/A'} ({wb.get('timestamp') or ''})")
+        if r.get('virustotal'):
+            v = r['virustotal']; stats = v.get('stats') or {}
+            lines.append(f"VirusTotal: malicious={stats.get('malicious')} suspicious={stats.get('suspicious')} harmless={stats.get('harmless')}")
+    elif qtype == 'email':
+        lines.append(f"Valid format: {r.get('valid_format')}")
+        lines.append(f"Domain MX: {r.get('domain_mx')}")
+        lines.append(f"Domain created: {r.get('domain_created', 'N/A')}")
+        grav = f" -> {r.get('gravatar')}" if r.get('gravatar_found') else ''
+        lines.append(f"Gravatar found: {r.get('gravatar_found')}{grav}")
+        lines.append(f"PGP key found: {r.get('pgp_key_found')}")
+        if r.get('hibp_breaches') is not None:
+            lines.append(f"HIBP breaches ({len(r['hibp_breaches'])}): {', '.join(r['hibp_breaches']) or 'none'}")
+        elif r.get('hibp_note'):
+            lines.append(r['hibp_note'])
+    elif qtype == 'phone':
+        for k in ('cleaned', 'valid', 'country', 'number', 'carrier', 'line_type', 'location'):
+            if r.get(k) is not None:
+                lines.append(f"{k.replace('_', ' ').capitalize()}: {r.get(k)}")
+        if r.get('error'):
+            lines.append(f"Error: {r['error']}")
+    return lines
+
+def build_report(qtype, query, result, generated_at=None):
+    idx = CATEGORY_FOR_TYPE.get(qtype)
+    return {
+        'title': 'OSINT Findings Report',
+        'target': query,
+        'type': qtype,
+        'generated_at': generated_at or datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'findings_category': METHODOLOGY_REFERENCE[idx][0] if idx is not None else None,
+        'findings_lines': format_findings_text(qtype, query, result),
+    }
+
+def render_report_txt(report):
+    W = 78
+    out = ['=' * W, report['title'].center(W), '=' * W,
+           f"Target   : {report['target']}",
+           f"Type     : {report['type']}",
+           f"Generated: {report['generated_at']}", '']
+
+    if report['findings_category']:
+        out += ['-' * W, f"AUTOMATED FINDINGS — {report['findings_category']}", '-' * W]
+        out += report['findings_lines'] or ['No data gathered.']
+        out.append('')
+
+    out += ['=' * W, 'OSINT METHODOLOGY CHECKLIST (REFERENCE)'.center(W), '=' * W,
+            'Manual follow-up techniques for this target and every other data type,',
+            'with their standard caveats — organized the same way OSINT investigators plan a case.', '']
+    for cat_title, items in METHODOLOGY_REFERENCE:
+        out.append(cat_title)
+        out.append('-' * len(cat_title))
+        for name, technique, caveat in items:
+            out.append(f"  * {name}: {technique}")
+            out.append(f"    Caveat: {caveat}")
+        out.append('')
+
+    return '\n'.join(out)
+
+def _pdf_safe(text):
+    # The core Helvetica/Courier fonts fpdf2 ships with only support latin-1 —
+    # swap the handful of "smart"/typographic characters this report actually
+    # uses for plain ASCII, then hard-fallback anything else so a stray
+    # character (e.g. from raw whois text) can never 500 the whole report.
+    text = (str(text)
+            .replace('—', '-').replace('–', '-')
+            .replace('‘', "'").replace('’', "'")
+            .replace('“', '"').replace('”', '"'))
+    text = text.encode('latin-1', 'replace').decode('latin-1')
+    # Raw whois/DNS text sometimes contains a single unbroken token (a long
+    # URL, an obfuscated email, a DNSSEC blob) wider than the page — fpdf2
+    # can't wrap those and throws, so force a break point every 90 chars.
+    def hard_wrap(line):
+        words = []
+        for w in line.split(' '):
+            while len(w) > 90:
+                words.append(w[:90])
+                w = w[90:]
+            words.append(w)
+        return ' '.join(words)
+    return '\n'.join(hard_wrap(l) for l in text.split('\n'))
+
+def render_report_pdf(report):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    pdf.set_font('Helvetica', 'B', 16)
+    pdf.cell(0, 10, _pdf_safe(report['title']), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, _pdf_safe(f"Target: {report['target']}    Type: {report['type']}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 6, _pdf_safe(f"Generated: {report['generated_at']}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(4)
+
+    if report['findings_category']:
+        pdf.set_font('Helvetica', 'B', 13)
+        pdf.set_fill_color(230, 230, 230)
+        pdf.cell(0, 8, _pdf_safe(f"Automated Findings - {report['findings_category']}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
+        pdf.set_font('Courier', '', 9)
+        for line in (report['findings_lines'] or ['No data gathered.']):
+            # multi_cell's default new_x=XPos.RIGHT leaves the cursor at the right
+            # margin, so the next w=0 call would compute ~zero width — reset to
+            # the left margin every time.
+            pdf.multi_cell(0, 5, _pdf_safe(line), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(4)
+
+    pdf.add_page()
+    pdf.set_font('Helvetica', 'B', 15)
+    pdf.cell(0, 10, 'OSINT Methodology Checklist (Reference)', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font('Helvetica', 'I', 9)
+    pdf.multi_cell(0, 5, 'Manual follow-up techniques for this target and every other data type, '
+                          'with their standard caveats.', new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(2)
+
+    for cat_title, items in METHODOLOGY_REFERENCE:
+        pdf.set_font('Helvetica', 'B', 12)
+        pdf.set_fill_color(220, 235, 245)
+        pdf.cell(0, 7, _pdf_safe(cat_title), new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
+        for name, technique, caveat in items:
+            pdf.set_font('Helvetica', 'B', 9)
+            pdf.write(5, _pdf_safe(f"{name}: "))
+            pdf.set_font('Helvetica', '', 9)
+            pdf.write(5, _pdf_safe(f"{technique}\n"))
+            pdf.set_font('Helvetica', 'I', 8)
+            pdf.write(5, _pdf_safe(f"    Caveat: {caveat}\n"))
+        pdf.ln(3)
+
+    return bytes(pdf.output())
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -1658,8 +2242,8 @@ def search():
 
     result = run_osint_module(search_type, query) or {}
 
-    save_result(search_type, query, json.dumps(result))
-    return jsonify({'type': search_type, 'query': query, 'result': result})
+    qid = save_result(search_type, query, json.dumps(result))
+    return jsonify({'id': qid, 'type': search_type, 'query': query, 'result': result})
 
 @app.route('/ai/status')
 def ai_status():
@@ -1711,8 +2295,8 @@ def ai_parse():
         result = run_osint_module(ttype, value)
         if result is None:
             continue
-        save_result(ttype, value, json.dumps(result))
-        results.append({'type': ttype, 'query': value, 'result': result})
+        qid = save_result(ttype, value, json.dumps(result))
+        results.append({'id': qid, 'type': ttype, 'query': value, 'result': result})
 
     return jsonify({'query': query, 'targets': targets, 'results': results})
 
@@ -1765,6 +2349,32 @@ def history_detail(qid):
         return jsonify({'error': 'Not found'})
     return jsonify({'id': row[0], 'type': row[1], 'query': row[2],
                     'result': json.loads(row[3]), 'time': row[4]})
+
+def _load_query_row(qid):
+    with sqlite3.connect(DB) as c:
+        return c.execute('SELECT type, query, result FROM queries WHERE id=?', (qid,)).fetchone()
+
+@app.route('/report/<int:qid>.txt')
+def report_txt(qid):
+    row = _load_query_row(qid)
+    if not row:
+        return 'Not found', 404
+    qtype, query, result_json = row
+    report = build_report(qtype, query, json.loads(result_json))
+    return Response(render_report_txt(report), mimetype='text/plain', headers={
+        'Content-Disposition': f'attachment; filename="osint-report-{qid}.txt"',
+    })
+
+@app.route('/report/<int:qid>.pdf')
+def report_pdf(qid):
+    row = _load_query_row(qid)
+    if not row:
+        return 'Not found', 404
+    qtype, query, result_json = row
+    report = build_report(qtype, query, json.loads(result_json))
+    return Response(render_report_pdf(report), mimetype='application/pdf', headers={
+        'Content-Disposition': f'attachment; filename="osint-report-{qid}.pdf"',
+    })
 
 @app.route('/status')
 def status():

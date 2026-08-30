@@ -19,9 +19,9 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
     exit 1
 fi
 
-echo "[*] Installing Flask..."
+echo "[*] Installing Python dependencies..."
 "$VENV_DIR/bin/pip" install --upgrade pip
-"$VENV_DIR/bin/pip" install flask
+"$VENV_DIR/bin/pip" install flask phonenumbers fpdf2
 
 ENV_FILE="$PROJECT_DIR/.env"
 if [ -f "$ENV_FILE" ] && grep -q '^GROQ_API_KEY=' "$ENV_FILE"; then
