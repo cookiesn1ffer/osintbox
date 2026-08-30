@@ -581,6 +581,39 @@ INDEX_HTML = """<!DOCTYPE html>
   }
   .platform-link:hover { text-decoration: underline; }
 
+  /* ── Result cards (segregated data-source groupings) ── */
+  .result-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 14px;
+    overflow: hidden;
+  }
+  .result-card.kind-info   { border-left-color: var(--cyan); }
+  .result-card.kind-good   { border-left-color: var(--green); }
+  .result-card.kind-warn   { border-left-color: var(--yellow); }
+  .result-card.kind-danger { border-left-color: var(--red); }
+
+  .result-card-header {
+    padding: 9px 16px;
+    background: var(--bg3);
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--dim);
+  }
+  .result-card.kind-info   .result-card-header { color: var(--cyan); }
+  .result-card.kind-good   .result-card-header { color: var(--green); }
+  .result-card.kind-warn   .result-card-header { color: var(--yellow); }
+  .result-card.kind-danger .result-card-header { color: var(--red); }
+
+  .result-card-body { padding: 14px 16px; }
+  .result-card-body .r-row:last-child { margin-bottom: 0; }
+  .result-card-body pre { margin: 0; }
+
   /* ── Summary links panel ── */
   .summary-grid {
     display: grid;
@@ -1002,6 +1035,19 @@ INDEX_HTML = """<!DOCTYPE html>
     container.innerHTML = html;
   }
 
+  // A bordered, labeled card used to visually segregate one data source
+  // (WHOIS, ASN, reputation, breach data, ...) from the rest of a result.
+  // kind drives the left-border/header accent color: info (default), good,
+  // warn, danger — use good/warn/danger only when the content itself signals
+  // a real risk level (e.g. a nonzero abuse score), not just for decoration.
+  function buildCard(title, bodyHtml, kind) {
+    kind = kind || 'info';
+    return `<div class="result-card kind-${kind}">
+      <div class="result-card-header">${escapeHtml(title)}</div>
+      <div class="result-card-body">${bodyHtml}</div>
+    </div>`;
+  }
+
   function buildResultHtml(data) {
     if (!data.result) {
       return '<span class="r-error">No result returned.</span>';
@@ -1025,11 +1071,8 @@ INDEX_HTML = """<!DOCTYPE html>
         ['Platforms Checked', checked],
       ]);
 
-      html += `<div class="r-section">found (${found.length})</div>`;
-      html += buildPlatformTable(found);
-
-      html += `<div class="r-section">not found (${miss.length})</div>`;
-      html += `<div class="r-miss">${miss.join(' · ') || 'none'}</div>`;
+      html += buildCard(`Found Platforms (${found.length})`, buildPlatformTable(found), found.length > 0 ? 'good' : 'info');
+      html += buildCard(`Not Found (${miss.length})`, `<div class="r-miss">${miss.join(' · ') || 'none'}</div>`, 'info');
 
       html += buildSummaryGrid([
         ['Query', data.query],
@@ -1059,20 +1102,18 @@ INDEX_HTML = """<!DOCTYPE html>
         ['Variations Searched', allKeys.length],
       ]);
 
-      html += `<div class="r-info">${allKeys.length} variations searched, ${hits.length} had hits</div>`;
-
-      html += `<div class="r-section">google dorks</div>`;
-      html += `<div>` + dorks.map(d =>
+      const dorksHtml = `<div>` + dorks.map(d =>
         `<a class="dork-btn" href="${d.url}" target="_blank">${d.label}</a>`
       ).join('') + `</div>`;
+      html += buildCard(`Google Dorks (${dorks.length})`, dorksHtml, 'info');
 
-      html += `<div class="r-section">username variations (${hits.length} with hits)</div>`;
       if (hits.length === 0) {
-        html += `<div class="r-miss">no variations returned hits</div>`;
+        html += buildCard('Username Variations', '<div class="r-miss">no variations returned hits</div>', 'info');
       } else {
+        // One card per variation with a verified hit — each is its own
+        // segregated result rather than one long undifferentiated list.
         hits.forEach(variation => {
-          html += `<div class="r-key" style="margin-top:10px">${variation}</div>`;
-          html += buildPlatformTable(variations[variation]);
+          html += buildCard(`${variation} (${variations[variation].length})`, buildPlatformTable(variations[variation]), 'good');
         });
       }
 
@@ -1088,121 +1129,112 @@ INDEX_HTML = """<!DOCTYPE html>
 
     } else if (data.type === 'ip') {
       const info = r.ipinfo || {};
-      html += row('IP',          r.resolved_ip);
-      html += row('Hostname',    r.reverse_dns);
-      html += row('City',        info.city);
-      html += row('Region',      info.region);
-      html += row('Country',     info.country);
-      html += row('Org/ASN',     info.org);
-      html += row('Timezone',    info.timezone);
-      html += row('Postal',      info.postal);
+      let coreRows = row('IP', r.resolved_ip) + row('Hostname', r.reverse_dns) +
+        row('City', info.city) + row('Region', info.region) + row('Country', info.country) +
+        row('Org/ASN', info.org) + row('Timezone', info.timezone) + row('Postal', info.postal);
       if (info.loc) {
-        html += row('Coords', `<a class="r-link" href="https://maps.google.com/?q=${info.loc}" target="_blank">${info.loc}</a>`);
+        coreRows += row('Coords', `<a class="r-link" href="https://maps.google.com/?q=${info.loc}" target="_blank">${info.loc}</a>`);
       }
+      html += buildCard('Core Info', coreRows, 'info');
 
       const asn = r.asn_info || {};
       if (asn.asn) {
-        html += `<div class="r-section">asn / netblock (Team Cymru)</div>`;
-        html += row('ASN',        'AS' + asn.asn + ' — ' + (asn.as_name || ''));
-        html += row('BGP Prefix', asn.bgp_prefix);
-        html += row('Registry',   (asn.registry || '').toUpperCase());
-        html += row('Allocated',  asn.allocated);
+        const asnRows = row('ASN', 'AS' + asn.asn + ' — ' + (asn.as_name || '')) +
+          row('BGP Prefix', asn.bgp_prefix) + row('Registry', (asn.registry || '').toUpperCase()) +
+          row('Allocated', asn.allocated);
+        html += buildCard('ASN / Netblock (Team Cymru)', asnRows, 'info');
       }
 
-      html += `<div class="r-section">rdap</div>`;
-      html += row('Org (RDAP)',   r.rdap_name);
-      html += row('Abuse Email',  r.rdap_abuse_email);
+      html += buildCard('RDAP', row('Org (RDAP)', r.rdap_name) + row('Abuse Email', r.rdap_abuse_email), 'info');
 
       if (r.abuseipdb) {
-        html += `<div class="r-section">abuseipdb reputation</div>`;
-        html += row('Abuse Score', r.abuseipdb.score + ' / 100');
-        html += row('Reports',     r.abuseipdb.reports);
-        html += row('ISP',         r.abuseipdb.isp);
-        html += row('Usage Type',  r.abuseipdb.usage_type);
+        const score = r.abuseipdb.score || 0;
+        const kind = score >= 25 ? 'danger' : (score > 0 ? 'warn' : 'good');
+        const abuseRows = row('Abuse Score', score + ' / 100') + row('Reports', r.abuseipdb.reports) +
+          row('ISP', r.abuseipdb.isp) + row('Usage Type', r.abuseipdb.usage_type);
+        html += buildCard('AbuseIPDB Reputation', abuseRows, kind);
       } else if (r.abuseipdb_error) {
-        html += `<div class="r-error" style="margin-top:6px">AbuseIPDB: ${escapeHtml(r.abuseipdb_error)}</div>`;
+        html += buildCard('AbuseIPDB Reputation', `<div class="r-error">${escapeHtml(r.abuseipdb_error)}</div>`, 'warn');
       }
 
       if (r.virustotal) {
         const stats = r.virustotal.stats || {};
-        html += `<div class="r-section">virustotal reputation</div>`;
-        html += row('Malicious',  stats.malicious);
-        html += row('Suspicious', stats.suspicious);
-        html += row('Harmless',   stats.harmless);
-        html += row('Reputation', r.virustotal.reputation);
+        const kind = (stats.malicious > 0) ? 'danger' : (stats.suspicious > 0 ? 'warn' : 'good');
+        const vtRows = row('Malicious', stats.malicious) + row('Suspicious', stats.suspicious) +
+          row('Harmless', stats.harmless) + row('Reputation', r.virustotal.reputation);
+        html += buildCard('VirusTotal Reputation', vtRows, kind);
       } else if (r.virustotal_error) {
-        html += `<div class="r-error" style="margin-top:6px">VirusTotal: ${escapeHtml(r.virustotal_error)}</div>`;
+        html += buildCard('VirusTotal Reputation', `<div class="r-error">${escapeHtml(r.virustotal_error)}</div>`, 'warn');
       }
 
     } else if (data.type === 'domain') {
-      html += `<div class="r-section">whois</div>`;
-      html += `<pre style="color:var(--text);font-size:11px;white-space:pre-wrap">${r.whois || 'N/A'}</pre>`;
-      html += `<div class="r-section">dns records</div>`;
-      ['A','MX','TXT','NS','CNAME'].forEach(t => {
-        html += row(`DNS ${t}`, r[`dns_${t}`]);
-      });
-      html += `<div class="r-section">subdomains (crt.sh + wordlist) (${(r.subdomains||[]).length})</div>`;
-      if (r.subdomains && r.subdomains.length > 0) {
-        html += r.subdomains.map(s =>
-          `<div class="r-found">· ${s}</div>`
-        ).join('');
-      } else {
-        html += `<div class="r-miss">none found</div>`;
-      }
+      html += buildCard('WHOIS', `<pre style="color:var(--text);font-size:11px;white-space:pre-wrap">${r.whois || 'N/A'}</pre>`, 'info');
+
+      let dnsRows = '';
+      ['A','MX','TXT','NS','CNAME'].forEach(t => { dnsRows += row(`DNS ${t}`, r[`dns_${t}`]); });
+      html += buildCard('DNS Records', dnsRows, 'info');
+
+      const subs = r.subdomains || [];
+      const subsHtml = subs.length > 0
+        ? subs.map(s => `<div class="r-found">· ${s}</div>`).join('')
+        : `<div class="r-miss">none found</div>`;
+      html += buildCard(`Subdomains (crt.sh + wordlist) (${subs.length})`, subsHtml, subs.length > 0 ? 'good' : 'info');
 
       if (r.wayback) {
-        html += `<div class="r-section">wayback machine</div>`;
-        html += row('Archived', r.wayback.archived ? '✓ yes' : 'no snapshots found');
+        let wbRows = row('Archived', r.wayback.archived ? '✓ yes' : 'no snapshots found');
         if (r.wayback.archived) {
-          html += row('Closest Snapshot', `<a class="r-link" href="${r.wayback.snapshot_url}" target="_blank">${r.wayback.timestamp}</a>`);
+          wbRows += row('Closest Snapshot', `<a class="r-link" href="${r.wayback.snapshot_url}" target="_blank">${r.wayback.timestamp}</a>`);
         }
+        html += buildCard('Wayback Machine', wbRows, r.wayback.archived ? 'good' : 'info');
       }
 
       if (r.virustotal) {
         const stats = r.virustotal.stats || {};
-        html += `<div class="r-section">virustotal reputation</div>`;
-        html += row('Malicious',  stats.malicious);
-        html += row('Suspicious', stats.suspicious);
-        html += row('Harmless',   stats.harmless);
-        html += row('Reputation', r.virustotal.reputation);
+        const kind = (stats.malicious > 0) ? 'danger' : (stats.suspicious > 0 ? 'warn' : 'good');
+        const vtRows = row('Malicious', stats.malicious) + row('Suspicious', stats.suspicious) +
+          row('Harmless', stats.harmless) + row('Reputation', r.virustotal.reputation);
+        html += buildCard('VirusTotal Reputation', vtRows, kind);
       } else if (r.virustotal_error) {
-        html += `<div class="r-error" style="margin-top:6px">VirusTotal: ${escapeHtml(r.virustotal_error)}</div>`;
+        html += buildCard('VirusTotal Reputation', `<div class="r-error">${escapeHtml(r.virustotal_error)}</div>`, 'warn');
       }
 
     } else if (data.type === 'email') {
-      html += row('Valid format',    r.valid_format ? '✓ yes' : '✗ no');
-      html += row('Domain MX',      r.domain_mx);
-      html += row('Domain created', r.domain_created || 'N/A');
-      html += row('Gravatar',       r.gravatar_found
-        ? `<a class="r-link" href="${r.gravatar}" target="_blank">${r.gravatar}</a>`
-        : 'not found');
-      html += row('PGP Key',        r.pgp_key_found === true
+      const coreRows = row('Valid format', r.valid_format ? '✓ yes' : '✗ no') +
+        row('Domain MX', r.domain_mx) + row('Domain created', r.domain_created || 'N/A') +
+        row('Gravatar', r.gravatar_found
+          ? `<a class="r-link" href="${r.gravatar}" target="_blank">${r.gravatar}</a>`
+          : 'not found');
+      html += buildCard('Core Info', coreRows, 'info');
+
+      const pgpRow = row('PGP Key', r.pgp_key_found === true
         ? `<a class="r-link" href="${r.pgp_lookup_url}" target="_blank">found on keys.openpgp.org</a>`
         : (r.pgp_key_found === false ? 'not found' : 'lookup unavailable'));
+      html += buildCard('PGP Key', pgpRow, r.pgp_key_found === true ? 'good' : 'info');
 
       if (r.hibp_breaches) {
-        html += `<div class="r-section">haveibeenpwned breaches (${r.hibp_breaches.length})</div>`;
-        html += r.hibp_breaches.length > 0
+        const n = r.hibp_breaches.length;
+        const breachHtml = n > 0
           ? r.hibp_breaches.map(b => `<div class="r-found">· ${escapeHtml(b)}</div>`).join('')
           : `<div class="r-miss">no breaches found</div>`;
+        html += buildCard(`HaveIBeenPwned Breaches (${n})`, breachHtml, n > 0 ? 'danger' : 'good');
       } else if (r.hibp_error) {
-        html += `<div class="r-error" style="margin-top:6px">HIBP: ${escapeHtml(r.hibp_error)}</div>`;
+        html += buildCard('HaveIBeenPwned', `<div class="r-error">${escapeHtml(r.hibp_error)}</div>`, 'warn');
       } else if (r.hibp_note) {
-        html += `<div class="r-info" style="margin-top:10px">${escapeHtml(r.hibp_note)}</div>`;
+        html += buildCard('HaveIBeenPwned', `<div class="r-info">${escapeHtml(r.hibp_note)}</div>`, 'info');
       }
 
     } else if (data.type === 'phone') {
-      html += row('Cleaned',    r.cleaned);
-      html += row('Valid',      r.valid === undefined ? undefined : (r.valid ? '✓ yes' : '✗ no'));
-      html += row('Country',    r.country);
-      html += row('Number',     r.number);
-      html += row('Carrier',    r.carrier);
-      html += row('Line Type',  r.line_type);
-      html += row('Location',   r.location);
-      if (r.error) html += `<div class="r-error" style="margin-top:6px">${escapeHtml(r.error)}</div>`;
-      html += `<div class="r-section">search links</div>`;
-      html += `<div><a class="r-link" href="${r.truecaller_link}" target="_blank">→ Truecaller</a></div>`;
-      html += `<div><a class="r-link" href="${r.sync_me_link}" target="_blank">→ Sync.me</a></div>`;
+      const coreRows = row('Cleaned', r.cleaned) +
+        row('Valid', r.valid === undefined ? undefined : (r.valid ? '✓ yes' : '✗ no')) +
+        row('Country', r.country) + row('Number', r.number);
+      html += buildCard('Core Info', coreRows + (r.error ? `<div class="r-error" style="margin-top:6px">${escapeHtml(r.error)}</div>` : ''), 'info');
+
+      const carrierRows = row('Carrier', r.carrier) + row('Line Type', r.line_type) + row('Location', r.location);
+      html += buildCard('Carrier & Line Type', carrierRows, r.line_type === 'VoIP' ? 'warn' : 'info');
+
+      const linksHtml = `<div><a class="r-link" href="${r.truecaller_link}" target="_blank">→ Truecaller</a></div>` +
+        `<div><a class="r-link" href="${r.sync_me_link}" target="_blank">→ Sync.me</a></div>`;
+      html += buildCard('Search Links', linksHtml, 'info');
     }
 
     return html;
