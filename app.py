@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import sqlite3, subprocess, socket, json, re, urllib.request, urllib.error, urllib.parse, hashlib
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 
 app = Flask(__name__)
@@ -1280,7 +1281,7 @@ def save_result(qtype, query, result):
 
 # ── OSINT modules ─────────────────────────────────────────────────────────────
 
-def check_username(username):
+def check_username(username, capture_bodies=False):
     def find_og_title(body):
         # attribute order varies (some sites render content="..." before property="og:title")
         m = re.search(r'<meta[^>]*?property=["\']og:title["\'][^>]*?content=["\']([^"\']*)["\']',
@@ -1317,7 +1318,7 @@ def check_username(username):
         # real channels get "{username} - Twitch".
         return title.strip().lower() != 'twitch' and '"statusCode":404' not in body
 
-    def linkedin_found(uname):
+    def linkedin_check(uname):
         url = f"https://www.linkedin.com/in/{uname}"
         headers = {
             'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -1330,19 +1331,14 @@ def check_username(username):
             resp = urllib.request.urlopen(req, timeout=8)
             final_url = resp.geturl()
             if '/login' in final_url or 'authwall' in final_url:
-                return False
+                return ("LinkedIn", False, url, None)
             body = resp.read(500000).decode('utf-8', errors='ignore')
-            if 'linkedin.com/in/' in final_url:
-                return True
-            if '"vanityName"' in body:
-                return True
-            if 'public-profile-hero-image' in body:
-                return True
-            if 'authwall' not in body and resp.status == 200:
-                return True
-            return False
+            ok = ('linkedin.com/in/' in final_url or '"vanityName"' in body
+                  or 'public-profile-hero-image' in body
+                  or ('authwall' not in body and resp.status == 200))
+            return ("LinkedIn", ok, url, body if ok else None)
         except Exception:
-            return False
+            return ("LinkedIn", False, url, None)
 
     # site -> (fetch_url, display_url, content_check)
     # content_check is None for a plain status==200 check
@@ -1382,32 +1378,45 @@ def check_username(username):
                         lambda b, u: 'ProfilePagedListFeed' in b),
     }
 
-    found, not_found = [], []
-    for site, (fetch_url, display_url, check) in sites.items():
+    def check_site(site, fetch_url, display_url, check):
         url = display_url or fetch_url
         try:
             req = urllib.request.Request(fetch_url, headers={'User-Agent': 'Mozilla/5.0'})
-            resp = urllib.request.urlopen(req, timeout=5)
+            resp = urllib.request.urlopen(req, timeout=8)
             if resp.status != 200:
-                not_found.append(site)
-                continue
+                return (site, False, url, None)
             if check is None:
-                found.append((site, url))
-                continue
+                return (site, True, url, None)
             body = resp.read(500000).decode('utf-8', errors='ignore')
-            if check(body, username):
+            ok = check(body, username)
+            return (site, ok, url, body if ok else None)
+        except Exception:
+            return (site, False, url, None)
+
+    # Checks are independent network I/O, so run them concurrently instead of
+    # one-by-one — sequential checks of ~19 sites (each up to several seconds)
+    # made username/name searches take minutes.
+    order = {site: i for i, site in enumerate(list(sites.keys()) + ["LinkedIn"])}
+    found, not_found, bodies = [], [], {}
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futures = [ex.submit(check_site, site, fetch_url, display_url, check)
+                   for site, (fetch_url, display_url, check) in sites.items()]
+        # LinkedIn needs custom headers/timeout/redirect handling, so it's a separate task
+        futures.append(ex.submit(linkedin_check, username))
+        for fut in as_completed(futures):
+            site, ok, url, body = fut.result()
+            if ok:
                 found.append((site, url))
+                if body:
+                    bodies[site] = body
             else:
                 not_found.append(site)
-        except Exception:
-            not_found.append(site)
 
-    # LinkedIn needs custom headers/timeout/redirect handling, so it's checked separately
-    if linkedin_found(username):
-        found.append(("LinkedIn", f"https://www.linkedin.com/in/{username}"))
-    else:
-        not_found.append("LinkedIn")
+    found.sort(key=lambda pair: order.get(pair[0], 999))
+    not_found.sort(key=lambda site: order.get(site, 999))
 
+    if capture_bodies:
+        return found, not_found, bodies
     return found, not_found
 
 def generate_username_variations(full_name):
@@ -1455,11 +1464,28 @@ def generate_dork_links(full_name):
         {"label": "Phone",      "url": search_url(f'{name_q} phone')},
     ]
 
+def name_matches_body(body, full_name):
+    # A bare username match (e.g. "aneek") is often a coincidental handle taken
+    # by an unrelated account on a billion-user platform, not the actual target.
+    # Require every part of the target's name to appear in the fetched profile
+    # page (display name / bio / JSON-LD) before counting it as a real hit.
+    # If we have no body to check (e.g. Gravatar, which is a plain 200 check
+    # with no page content captured), we can't verify — keep it as-is.
+    if body is None:
+        return True
+    parts = [p.lower() for p in full_name.strip().split() if p]
+    if not parts:
+        return True
+    low = body.lower()
+    return all(p in low for p in parts)
+
 def name_recon(full_name):
     variations_results = {}
     for variation in generate_username_variations(full_name):
-        found, _ = check_username(variation)
-        variations_results[variation] = found
+        found, _, bodies = check_username(variation, capture_bodies=True)
+        verified = [(site, url) for site, url in found
+                    if name_matches_body(bodies.get(site), full_name)]
+        variations_results[variation] = verified
 
     return {
         'variations_results': variations_results,
